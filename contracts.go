@@ -10,6 +10,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -255,4 +257,16 @@ func (c *Contract) encodeTxData(funcName string, _argValues string) ([]byte, err
 		values[i] = value
 	}
 	return c.ABI.Pack(funcName, values...)
+}
+
+func SetInputData(funcName string, funcArgs string, c *Contract, x *ethapi.TransactionArgs) error {
+	// note that func args must be in JSON format and ORDERED correctly.
+	// structs must be a map/dict and be of format "key: value" where the "key" is the struct field name
+	// and the key is in string format.
+	_bytes, err := c.encodeTxData(funcName, funcArgs)
+	if err != nil {
+		return err
+	}
+	x.Input = (*hexutil.Bytes)(&_bytes)
+	return nil
 }
