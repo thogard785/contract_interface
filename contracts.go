@@ -24,8 +24,6 @@ var (
 	ErrCantFindMethodABI      = errors.New("err - cant find method in ABI")
 	ErrCantFindStructFieldABI = errors.New("err - cant find struct field in ABI")
 	ErrStructFieldOutOfRange  = errors.New("err - struct field index out of range")
-	ErrCantFindMethodJSON     = errors.New("err - cant find method in JSON tx args")
-	ErrNotDynamicType         = errors.New("err - not dynamic type")
 	ErrCantAssignField        = errors.New("err - cant assign source field to dest field")
 	ErrCantSetDestField       = errors.New("err - cant set dest field")
 )
@@ -71,9 +69,8 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 		for i, fieldName := range t.TupleRawNames {
 			if _, ok := newMap[fieldName]; !ok {
 				log.Warn("err - encodeTx 1.b.1", "index", i, "missing field name", fieldName)
-				n := 0
 				for _fieldName := range newMap {
-					log.Warn("err - encodeTx 1.b.2", "index", n, "existing field name", _fieldName)
+					log.Warn("err - encodeTx 1.b.2", "existing field name", _fieldName)
 				}
 				return nil, ErrCantFindStructFieldABI
 			}
@@ -185,7 +182,10 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 
 	default:
 		value := reflect.New(t.GetType()).Interface()
-		json.Unmarshal(data, &value)
+		if err := json.Unmarshal(data, &value); err != nil {
+			log.Warn("err - encodeTx 7.b - default unmarshal fail", "argType", t.GetType().Name())
+			return value, err
+		}
 		return value, nil
 	}
 }
