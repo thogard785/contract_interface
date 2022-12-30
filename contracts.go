@@ -14,6 +14,9 @@ import (
 )
 
 // meant to copy pasta'd inside of geth/bor in a convenient spot for your implementation
+// this is not meant to be a complete package nor should it be used by anyone,
+// it merely serves as an example of how others might implement their own version
+// of a similar package.
 
 var (
 	ErrCantFindMethodABI      = errors.New("err - cant find method in ABI")
@@ -84,6 +87,7 @@ func (c *Contract) UpdateContractABI(abiRaw []byte) error {
 
 // indirect recursively dereferences the value until it either gets the value
 // or finds a big.Int
+// copied from reflect package
 func indirect(v reflect.Value) reflect.Value {
 	if v.Kind() == reflect.Ptr && v.Elem().Type() != reflect.TypeOf(big.Int{}) {
 		return indirect(v.Elem())
@@ -100,7 +104,7 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 			return nil, err
 		}
 
-		newTuple := indirect(reflect.New(t.GetType())) //.Interface()
+		newTuple := indirect(reflect.New(t.GetType()))
 		for i, fieldName := range t.TupleRawNames {
 			if _, ok := newMap[fieldName]; !ok {
 				log.Warn("err - encodeTx 1.b.1", "index", i, "missing field name", fieldName)
