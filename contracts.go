@@ -48,45 +48,6 @@ func NewContract(contractAddress common.Address, abiRawJSON string) (*Contract, 
 	}, nil
 }
 
-func (c *Contract) getMethodNames() []string {
-	c.Lock.RLock()
-	defer c.Lock.RUnlock()
-	methodNames := make([]string, len(c.ABI.Methods))
-	n := 0
-	for name, method := range c.ABI.Methods {
-		if method.IsPayable() {
-			methodNames[n] = name
-			n++
-		}
-	}
-	return methodNames
-}
-
-func (c *Contract) UpdateContractAddress(contractAddress common.Address) {
-	c.Lock.Lock()
-	defer c.Lock.Unlock()
-	c.Address = contractAddress
-}
-
-func (c *Contract) getContractAddress() common.Address {
-	c.Lock.RLock()
-	defer c.Lock.RUnlock()
-	contractAddress := c.Address
-	return contractAddress
-}
-
-func (c *Contract) UpdateContractABI(abiRaw []byte) error {
-	c.Lock.Lock()
-	defer c.Lock.Unlock()
-	abi, err2 := abi.JSON(strings.NewReader(string(abiRaw)))
-	if err2 != nil {
-		log.Warn("err - loadABI 2", "error:", err2)
-		return err2
-	}
-	c.ABI = &abi
-	return nil
-}
-
 // indirect recursively dereferences the value until it either gets the value
 // or finds a big.Int
 // copied from reflect package
@@ -156,7 +117,7 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 			return nil, err
 		}
 
-		newValueSlice := reflect.MakeSlice(t.GetType(), len(newSlice), len(newSlice)) //.Interface()
+		newValueSlice := reflect.MakeSlice(t.GetType(), len(newSlice), len(newSlice))
 
 		for i, value := range newSlice {
 			newValue, err := handleNestedUnmarshal(value, *t.Elem)
