@@ -88,6 +88,7 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 				n := 0
 				for _fieldName := range newMap {
 					log.Warn("err - encodeTx 2.b.2", "index", n, "existing field name", _fieldName)
+					n++
 				}
 				return nil, ErrStructFieldOutOfRange
 			}
