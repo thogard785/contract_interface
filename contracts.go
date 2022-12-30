@@ -36,8 +36,8 @@ type Contract struct {
 	Lock    sync.RWMutex
 }
 
-func NewContract(contractAddress common.Address, abiRaw []byte) (*Contract, error) {
-	abi, err := abi.JSON(strings.NewReader(string(abiRaw)))
+func NewContract(contractAddress common.Address, abiRawJSON string) (*Contract, error) {
+	abi, err := abi.JSON(strings.NewReader(abiRawJSON))
 	if err != nil {
 		log.Warn("err - loadABI", "error:", err)
 		return nil, err
