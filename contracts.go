@@ -56,142 +56,168 @@ func indirect(v reflect.Value) reflect.Value {
 	return v
 }
 
-func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error) {
-	switch t.T {
-	case abi.TupleTy:
+func handleTuple(data json.RawMessage, t abi.Type) (interface{}, error) {
+	newMap := make(map[string]json.RawMessage, len(t.TupleElems))
+	if err := json.Unmarshal(data, &newMap); err != nil {
+		return nil, err
+	}
 
-		newMap := make(map[string]json.RawMessage, len(t.TupleElems))
-		if err := json.Unmarshal(data, &newMap); err != nil {
+	newTuple := indirect(reflect.New(t.GetType()))
+	for i, fieldName := range t.TupleRawNames {
+		if _, ok := newMap[fieldName]; !ok {
+			log.Warn("err - encodeTx 1.b.1", "index", i, "missing field name", fieldName)
+			for _fieldName := range newMap {
+				log.Warn("err - encodeTx 1.b.2", "existing field name", _fieldName)
+			}
+			return nil, ErrCantFindStructFieldABI
+		}
+
+		newValue, err := handleNestedUnmarshal(newMap[fieldName], *t.TupleElems[i])
+		if err != nil {
 			return nil, err
 		}
 
-		newTuple := indirect(reflect.New(t.GetType()))
-		for i, fieldName := range t.TupleRawNames {
-			if _, ok := newMap[fieldName]; !ok {
-				log.Warn("err - encodeTx 1.b.1", "index", i, "missing field name", fieldName)
-				for _fieldName := range newMap {
-					log.Warn("err - encodeTx 1.b.2", "existing field name", _fieldName)
-				}
-				return nil, ErrCantFindStructFieldABI
+		if i >= newTuple.NumField() {
+			log.Warn("err - encodeTx 2.b.1", "index", i, "missing field name", fieldName)
+			for _fieldName := range newMap {
+				log.Warn("err - encodeTx 2.b.2", "existing field name", _fieldName)
 			}
-
-			newValue, err := handleNestedUnmarshal(newMap[fieldName], *t.TupleElems[i])
-			if err != nil {
-				return nil, err
-			}
-
-			if i >= newTuple.NumField() {
-				log.Warn("err - encodeTx 2.b.1", "index", i, "missing field name", fieldName)
-				for _fieldName := range newMap {
-					log.Warn("err - encodeTx 2.b.2", "existing field name", _fieldName)
-				}
-				return nil, ErrStructFieldOutOfRange
-			}
-
-			dst := newTuple.Field(i)
-			src := indirect(reflect.ValueOf(newValue))
-
-			if !dst.CanSet() {
-				log.Warn("err - encodeTx 3.b.1", "index", i, "field name", fieldName, "err", ErrCantSetDestField)
-				return nil, ErrCantSetDestField
-			}
-
-			if !src.Type().AssignableTo(dst.Type()) {
-				log.Warn("err - encodeTx 3.b.2", "index", i, "field name", fieldName, "srcType", src.Type().Name(), "dstType", dst.Type().Name())
-				return nil, ErrCantAssignField
-			}
-
-			dst.Set(src)
+			return nil, ErrStructFieldOutOfRange
 		}
 
-		return newTuple.Interface(), nil
+		dst := newTuple.Field(i)
+		if !dst.CanSet() {
+			log.Warn("err - encodeTx 3.b.1", "index", i, "field name", fieldName, "err", ErrCantSetDestField)
+			return nil, ErrCantSetDestField
+		}
 
-	case abi.SliceTy, abi.ArrayTy:
-		var newSlice []json.RawMessage
-		if err := json.Unmarshal(data, &newSlice); err != nil {
-			log.Warn("err - encodeTx 4.b", "name", t.GetType().Name(), "err", err)
+		src := indirect(reflect.ValueOf(newValue))
+		if !src.Type().AssignableTo(dst.Type()) {
+			log.Warn("err - encodeTx 3.b.2", "index", i, "field name", fieldName, "srcType", src.Type().Name(), "dstType", dst.Type().Name())
+			return nil, ErrCantAssignField
+		}
+
+		dst.Set(src)
+	}
+
+	return newTuple.Interface(), nil
+}
+
+func handleSlice(data json.RawMessage, t abi.Type) (interface{}, error) {
+	var newSlice []json.RawMessage
+	if err := json.Unmarshal(data, &newSlice); err != nil {
+		log.Warn("err - encodeTx 4.b", "name", t.GetType().Name(), "err", err)
+		return nil, err
+	}
+
+	newValueSlice := reflect.MakeSlice(t.GetType(), len(newSlice), len(newSlice))
+
+	for i, value := range newSlice {
+		newValue, err := handleNestedUnmarshal(value, *t.Elem)
+		if err != nil {
+			log.Warn("err - encodeTx 5.b", "index", i, "name", t.GetType().Name(), "err", err)
 			return nil, err
 		}
 
-		newValueSlice := reflect.MakeSlice(t.GetType(), len(newSlice), len(newSlice))
-
-		for i, value := range newSlice {
-			newValue, err := handleNestedUnmarshal(value, *t.Elem)
-			if err != nil {
-				log.Warn("err - encodeTx 5.b", "index", i, "name", t.GetType().Name(), "err", err)
-				return nil, err
-			}
-
-			dst := newValueSlice.Index(i)
-			src := indirect(reflect.ValueOf(newValue))
-
-			if !dst.CanSet() {
-				log.Warn("err - encodeTx 6.b.1", "index", i, "err", ErrCantSetDestField)
-				return nil, ErrCantSetDestField
-			}
-
-			if !src.Type().AssignableTo(dst.Type()) {
-				log.Warn("err - encodeTx 6.b.2", "index", i, "srcType", src.Type().Name(), "dstType", dst.Type().Name())
-				return nil, ErrCantAssignField
-			}
-
-			dst.Set(src)
-		}
-		return newValueSlice.Interface(), nil
-
-	case abi.FixedBytesTy:
-		switch t.Size {
-		case 32:
-			var target [32]byte
-			if err := json.Unmarshal(data, &target); err != nil {
-				target = [32]byte{0}
-			}
-			if reflect.TypeOf(target) == reflect.TypeOf("") {
-				target = [32]byte{0}
-			}
-			return target, nil
-		case 8:
-			var target [8]byte
-			if err := json.Unmarshal(data, &target); err != nil {
-				target = [8]byte{0}
-			}
-			if reflect.TypeOf(target) == reflect.TypeOf("") {
-				target = [8]byte{0}
-			}
-			return target, nil
-		default:
-			var target []byte
-			if err := json.Unmarshal(data, &target); err != nil {
-				target = []byte{0}
-			}
-			if reflect.TypeOf(target) == reflect.TypeOf("") {
-				target = []byte{0}
-			}
-			return target, nil
+		dst := newValueSlice.Index(i)
+		if !dst.CanSet() {
+			log.Warn("err - encodeTx 6.b.1", "index", i, "err", ErrCantSetDestField)
+			return nil, ErrCantSetDestField
 		}
 
-	case abi.BytesTy:
-		var target []byte
+		src := indirect(reflect.ValueOf(newValue))
+		if !src.Type().AssignableTo(dst.Type()) {
+			log.Warn("err - encodeTx 6.b.2", "index", i, "srcType", src.Type().Name(), "dstType", dst.Type().Name())
+			return nil, ErrCantAssignField
+		}
+
+		dst.Set(src)
+	}
+	return newValueSlice.Interface(), nil
+}
+
+func handleFixedBytes(data json.RawMessage, t abi.Type) (interface{}, error) {
+	switch t.Size {
+	case 32:
+		var target [32]byte
 		if err := json.Unmarshal(data, &target); err != nil {
-			target = []byte{0}
+			target = [32]byte{0}
 		}
 		if reflect.TypeOf(target) == reflect.TypeOf("") {
-			target = []byte{0}
+			target = [32]byte{0}
 		}
 		return target, nil
-
-	default:
-		value := reflect.New(t.GetType()).Interface()
-		if err := json.Unmarshal(data, &value); err != nil {
-			log.Warn("err - encodeTx 7.b - default unmarshal fail", "argType", t.GetType().Name())
-			return value, err
+	case 8:
+		var target [8]byte
+		if err := json.Unmarshal(data, &target); err != nil {
+			target = [8]byte{0}
 		}
-		return value, nil
+		if reflect.TypeOf(target) == reflect.TypeOf("") {
+			target = [8]byte{0}
+		}
+		return target, nil
+	default:
+		return handleDynamicBytes(data, t)
 	}
 }
 
-func (c *Contract) encodeTxData(funcName string, _argValues string) ([]byte, error) {
-	// _argValues must be a JSON-format string
+func handleDynamicBytes(data json.RawMessage, t abi.Type) (interface{}, error) {
+	var target []byte
+	if err := json.Unmarshal(data, &target); err != nil {
+		target = []byte{0}
+	}
+	if reflect.TypeOf(target) == reflect.TypeOf("") {
+		target = []byte{0}
+	}
+	return target, nil
+}
+
+func handleDefault(data json.RawMessage, t abi.Type) (interface{}, error) {
+	value := reflect.New(t.GetType()).Interface()
+	if err := json.Unmarshal(data, &value); err != nil {
+		log.Warn("err - encodeTx 7.b - default unmarshal fail", "argType", t.GetType().Name())
+		return value, err
+	}
+	return value, nil
+}
+
+func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error) {
+	switch t.T {
+	case abi.TupleTy:
+		return handleTuple(data, t) // tuple -> struct
+	case abi.SliceTy, abi.ArrayTy:
+		return handleSlice(data, t)
+	case abi.FixedBytesTy:
+		return handleFixedBytes(data, t)
+	case abi.BytesTy:
+		return handleDynamicBytes(data, t)
+	default:
+		return handleDefault(data, t)
+	}
+}
+
+func handleLayerZeroUnmarshal(funcArgs string) ([]json.RawMessage, error) {
+	var argValues []json.RawMessage
+	err := json.Unmarshal([]byte(funcArgs), &argValues)
+	return argValues, err
+}
+
+func buildInterfaceValues(argValues []json.RawMessage, method abi.Method) ([]interface{}, error) {
+	values := make([]interface{}, len(argValues))
+	for i := 0; i < len(method.Inputs); i++ {
+		_value, _type := argValues[i], method.Inputs[i].Type
+		value, err := handleNestedUnmarshal(_value, _type)
+		if err != nil {
+			log.Warn("err - encodeTx 1a", "index", i, "name", method.Inputs[i].Name, "err", err)
+			return values, err
+		}
+		values[i] = value
+	}
+	return values, nil
+}
+
+func (c *Contract) encodeTxData(funcName string, funcArgs string) ([]byte, error) {
+	// funcArgs must be a JSON-format string
 	c.Lock.RLock()
 	defer c.Lock.RUnlock()
 
@@ -200,33 +226,30 @@ func (c *Contract) encodeTxData(funcName string, _argValues string) ([]byte, err
 		return []byte{0}, ErrCantFindMethodABI
 	}
 
-	var argValues []json.RawMessage
-	if err := json.Unmarshal([]byte(_argValues), &argValues); err != nil {
+	argValues, err := handleLayerZeroUnmarshal(funcArgs)
+	if err != nil {
 		log.Warn("err", "encodeTx 0a", err)
 		return []byte{0}, err
 	}
 
-	values := make([]interface{}, len(argValues))
-	for i := 0; i < len(method.Inputs); i++ {
-		_value, _type := argValues[i], method.Inputs[i].Type
-		value, err := handleNestedUnmarshal(_value, _type)
-		if err != nil {
-			log.Warn("err - encodeTx 1a", "index", i, "name", method.Inputs[i].Name, "err", err)
-			return []byte{0}, err
-		}
-		values[i] = value
+	values, err := buildInterfaceValues(argValues, method)
+	if err != nil {
+		log.Warn("err", "encodeTx 1a", err)
+		return []byte{0}, err
 	}
+
 	return c.ABI.Pack(funcName, values...)
 }
 
-func SetInputData(funcName string, funcArgs string, c *Contract, x *ethapi.TransactionArgs) error {
+func (c *Contract) SetInputData(funcName string, funcArgs string, txArgs *ethapi.TransactionArgs) error {
 	// note that func args must be in JSON format and ORDERED correctly.
 	// structs must be a map/dict and be of format "key: value" where the "key" is the struct field name
 	// and the key is in string format.
 	_bytes, err := c.encodeTxData(funcName, funcArgs)
 	if err != nil {
+		log.Warn("err", "encodeTx 2a", err)
 		return err
 	}
-	x.Input = (*hexutil.Bytes)(&_bytes)
+	txArgs.Input = (*hexutil.Bytes)(&_bytes)
 	return nil
 }
