@@ -59,7 +59,8 @@ func indirect(v reflect.Value) reflect.Value {
 func handleTuple(data json.RawMessage, t abi.Type) (interface{}, error) {
 	newMap := make(map[string]json.RawMessage, len(t.TupleElems))
 	if err := json.Unmarshal(data, &newMap); err != nil {
-		return nil, err
+		log.Warn("err - encodeTx 0.b", "could not unmarshal tuple to map", err)
+		return handleTupleNoKeys(data, t) // try slice if it isn't a map
 	}
 
 	newTuple := indirect(reflect.New(t.GetType()))
@@ -82,6 +83,43 @@ func handleTuple(data json.RawMessage, t abi.Type) (interface{}, error) {
 			for _fieldName := range newMap {
 				log.Warn("err - encodeTx 2.b.2", "existing field name", _fieldName)
 			}
+			return nil, ErrStructFieldOutOfRange
+		}
+
+		dst := newTuple.Field(i)
+		if !dst.CanSet() {
+			log.Warn("err - encodeTx 3.b.1", "index", i, "field name", fieldName, "err", ErrCantSetDestField)
+			return nil, ErrCantSetDestField
+		}
+
+		src := indirect(reflect.ValueOf(newValue))
+		if !src.Type().AssignableTo(dst.Type()) {
+			log.Warn("err - encodeTx 3.b.2", "index", i, "field name", fieldName, "srcType", src.Type().Name(), "dstType", dst.Type().Name())
+			return nil, ErrCantAssignField
+		}
+
+		dst.Set(src)
+	}
+
+	return newTuple.Interface(), nil
+}
+
+func handleTupleNoKeys(data json.RawMessage, t abi.Type) (interface{}, error) {
+	var newSlice []json.RawMessage
+	if err := json.Unmarshal(data, &newSlice); err != nil {
+		log.Warn("err - encodeTx 4.b", "name", t.GetType().Name(), "err", err)
+		return nil, err
+	}
+
+	newTuple := indirect(reflect.New(t.GetType()))
+	for i, fieldName := range t.TupleRawNames {
+		newValue, err := handleNestedUnmarshal(newSlice[i], *t.TupleElems[i])
+		if err != nil {
+			return nil, err
+		}
+
+		if i >= newTuple.NumField() {
+			log.Warn("err - encodeTx 2.b.1", "index", i, "missing field name", fieldName)
 			return nil, ErrStructFieldOutOfRange
 		}
 
