@@ -1,6 +1,7 @@
-package thoggywoggy
+package json_contract_interface
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math/big"
@@ -10,8 +11,9 @@ import (
 
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/internal/ethapi"
+
+	//"github.com/ethereum/go-ethereum/common/hexutil"
+	//"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -26,6 +28,7 @@ var (
 	ErrStructFieldOutOfRange  = errors.New("err - struct field index out of range")
 	ErrCantAssignField        = errors.New("err - cant assign source field to dest field")
 	ErrCantSetDestField       = errors.New("err - cant set dest field")
+	ErrCantDecodeBytesArray   = errors.New("err - cant decode to intended bytes array format")
 )
 
 type Contract struct {
@@ -174,40 +177,53 @@ func handleSlice(data json.RawMessage, t abi.Type) (interface{}, error) {
 	return newValueSlice.Interface(), nil
 }
 
-func handleFixedBytes(data json.RawMessage, t abi.Type) (interface{}, error) {
-	switch t.Size {
-	case 32:
-		var target [32]byte
-		if err := json.Unmarshal(data, &target); err != nil {
-			target = [32]byte{0}
+func handleBytes(data json.RawMessage, t abi.Type) (interface{}, error) {
+	var targetStr string
+	if err := json.Unmarshal(data, &targetStr); err == nil {
+		if targetStr[:2] == "0x" {
+			if hexbytes, err := hex.DecodeString(targetStr[2:]); err == nil {
+				if value, err := assignBytes(hexbytes, t); err == nil {
+					return value, nil
+				}
+			}
 		}
-		if reflect.TypeOf(target) == reflect.TypeOf("") {
-			target = [32]byte{0}
+		if hexbytes, err := hex.DecodeString(targetStr); err == nil {
+			if value, err := assignBytes(hexbytes, t); err == nil {
+				return value, nil
+			}
 		}
-		return target, nil
-	case 8:
-		var target [8]byte
-		if err := json.Unmarshal(data, &target); err != nil {
-			target = [8]byte{0}
+		if value, err := assignBytes([]byte(targetStr), t); err == nil {
+			return value, nil
 		}
-		if reflect.TypeOf(target) == reflect.TypeOf("") {
-			target = [8]byte{0}
-		}
-		return target, nil
-	default:
-		return handleDynamicBytes(data, t)
 	}
+	log.Warn("err -", "couldnt decode bytes, attempting default decode of target", targetStr)
+	return handleDefault(data, t)
 }
 
-func handleDynamicBytes(data json.RawMessage, t abi.Type) (interface{}, error) {
-	var target []byte
-	if err := json.Unmarshal(data, &target); err != nil {
-		target = []byte{0}
+func assignBytes(targetByteSlice []byte, t abi.Type) (interface{}, error) {
+	// This is a very messy way to handle fixed sized byte array unpacking.
+	// If you have a better / cleaner way, please please please submit a PR
+	// TODO: see if there are cases in which the byte array isn't size 32
+
+	// handle byte slices
+	if t.T == abi.BytesTy {
+		value := indirect(reflect.New(reflect.TypeOf([]byte{0})))
+		value.SetBytes(targetByteSlice)
+		return value.Interface(), nil
 	}
-	if reflect.TypeOf(target) == reflect.TypeOf("") {
-		target = []byte{0}
+
+	// if not a slice, handle array
+	arrayType := reflect.ArrayOf(t.Size, reflect.TypeOf(uint8(0)))
+	value := indirect(reflect.New(arrayType))
+
+	for i := 0; i < t.Size; i++ {
+		if i < len(targetByteSlice) {
+			value.Index(i).Set(reflect.ValueOf(uint8(targetByteSlice[i])))
+		} else {
+			value.Index(i).Set(reflect.ValueOf(uint8(0)))
+		}
 	}
-	return target, nil
+	return value.Interface(), nil
 }
 
 func handleDefault(data json.RawMessage, t abi.Type) (interface{}, error) {
@@ -225,10 +241,8 @@ func handleNestedUnmarshal(data json.RawMessage, t abi.Type) (interface{}, error
 		return handleTuple(data, t) // tuple -> struct
 	case abi.SliceTy, abi.ArrayTy:
 		return handleSlice(data, t)
-	case abi.FixedBytesTy:
-		return handleFixedBytes(data, t)
-	case abi.BytesTy:
-		return handleDynamicBytes(data, t)
+	case abi.BytesTy, abi.FixedBytesTy:
+		return handleBytes(data, t)
 	default:
 		return handleDefault(data, t)
 	}
@@ -279,15 +293,15 @@ func (c *Contract) encodeTxData(funcName string, funcArgs string) ([]byte, error
 	return c.ABI.Pack(funcName, values...)
 }
 
-func (c *Contract) SetInputData(funcName string, funcArgs string, txArgs *ethapi.TransactionArgs) error {
-	// note that func args must be in JSON format and ORDERED correctly.
-	// structs must be a map/dict and be of format "key: value" where the "key" is the struct field name
-	// and the key is in string format.
-	_bytes, err := c.encodeTxData(funcName, funcArgs)
-	if err != nil {
-		log.Warn("err", "encodeTx 2a", err)
-		return err
-	}
-	txArgs.Input = (*hexutil.Bytes)(&_bytes)
-	return nil
-}
+//func (c *Contract) SetInputData(funcName string, funcArgs string, txArgs *ethapi.TransactionArgs) error {
+// note that func args must be in JSON format and ORDERED correctly.
+// structs must be a map/dict and be of format "key: value" where the "key" is the struct field name
+// and the key is in string format.
+//	_bytes, err := c.encodeTxData(funcName, funcArgs)
+//	if err != nil {
+//		log.Warn("err", "encodeTx 2a", err)
+//		return err
+//	}
+//	txArgs.Input = (*hexutil.Bytes)(&_bytes)
+//	return nil
+//}
